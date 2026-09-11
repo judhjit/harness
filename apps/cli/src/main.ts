@@ -30,6 +30,8 @@ eng eval run suite.json
 eng approve APPROVAL_ID --hash SUBJECT_HASH
 eng workspace list | add profile.json | import GROUP_ID file.code-workspace
 eng run JIRA-428 --workspace GROUP_ID --ticket ticket.json
+eng terminal RUN_ID --data /path/to/harness-data
+eng run JIRA-428 --repo registered-id --terminal
 
 node apps/cli/src/main.ts run JIRA-428 --repo /repo --ticket ticket.json --files src/a.ts --runtime runtime.json
 node apps/cli/src/main.ts status ENG-2026-000001

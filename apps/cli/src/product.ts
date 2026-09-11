@@ -14,6 +14,7 @@ import { HarnessError } from "../../../packages/core/src/contracts.ts";
 export async function productCli(args: string[]): Promise<boolean> {
   const commands = [
     "serve",
+    "terminal",
     "doctor",
     "repo",
     "workspace",
@@ -47,6 +48,7 @@ export async function productCli(args: string[]): Promise<boolean> {
         json: { type: "boolean" },
         operation: { type: "string" },
         help: { type: "boolean" },
+        terminal: { type: "boolean" },
       },
     });
     const [cmd, arg, extra] = positionals;
@@ -58,6 +60,13 @@ export async function productCli(args: string[]): Promise<boolean> {
       return true;
     }
     app = new Application(root);
+    if (cmd === "terminal" || values.terminal) {
+      if (!process.stdin.isTTY || !process.stdout.isTTY)
+        throw new Error(
+          "Open a real VS Code terminal: interactive Gemini cannot run through a pipe or the browser worker",
+        );
+      app.terminalAttached = true;
+    }
     if (cmd === "doctor") print(await app.doctor());
     else if (cmd === "repo") {
       if (arg === "list") print(app.data.repositories());
@@ -124,9 +133,25 @@ export async function productCli(args: string[]): Promise<boolean> {
         process.removeListener("SIGINT", stop);
         process.removeListener("SIGTERM", stop);
       }
-    } else if (cmd === "resume") {
+    } else if (cmd === "resume" || cmd === "terminal") {
       if (!arg) throw new Error("Run ID required");
-      print(await app.execute(arg));
+      if (
+        cmd === "terminal" &&
+        ["FAILED", "CANCELLED", "COMPLETED"].includes(app.store.get(arg).status)
+      )
+        throw new Error(
+          "This run is terminal; start a new run for an interactive workflow",
+        );
+      const controller = new AbortController();
+      const stop = () => controller.abort();
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+      try {
+        print(await app.execute(arg, controller.signal));
+      } finally {
+        process.removeListener("SIGINT", stop);
+        process.removeListener("SIGTERM", stop);
+      }
     } else if (cmd === "approve") {
       if (!arg || !values.hash)
         throw new Error(

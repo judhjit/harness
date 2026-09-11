@@ -30,6 +30,7 @@ export interface RepositoryProfile {
     args: string[];
     environmentNames: string[];
     mode: "workstation" | "docker";
+    interaction?: "terminal" | "headless";
     image?: string;
   };
   workflow?: Workflow;

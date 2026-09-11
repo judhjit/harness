@@ -70,6 +70,10 @@ show the complete repository/revision set. CLI status includes child IDs; inspec
 their logs individually for full agent traces. The parent event stream records child
 lifecycle transitions, integration checks and linked publication progress.
 
+For Gemini tool approvals, run `eng terminal PARENT_RUN_ID` in the VS Code terminal.
+The parent waits with its child without consuming retries. See
+[terminal interaction](terminal-workflow.md) for the per-phase JSON handoff and limits.
+
 Lifecycle:
 
 1. Freeze group/profile/workflow/skill definitions and every base commit at creation.

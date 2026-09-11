@@ -21,7 +21,8 @@ import {
   validateRetrievedTicket,
   validateTicketHierarchy,
 } from "../packages/adapters/src/ticket-intake.ts";
-import { HarnessError } from "../packages/core/src/contracts.ts";
+import { HarnessError, Waiting } from "../packages/core/src/contracts.ts";
+import { TerminalGeminiRuntime } from "../packages/adapters/src/terminal-runtime.ts";
 
 export function productFixture() {
   const root = fixtureRoot(),
@@ -143,6 +144,151 @@ function multiFixture() {
   });
   return { ...fixture, second, workspace };
 }
+
+test("server-side terminal handoff waits without invoking Gemini or spending retries", async () => {
+  const { app, root } = productFixture();
+  try {
+    app.factory = (p, w) =>
+      new TerminalGeminiRuntime(root, w, p.runtime, false);
+    const run = await app.create("pilot", { key: "ENG-40" }, false, false);
+    const first = await app.execute(run.id);
+    assert.equal(first.status, "WAITING", first.error ?? "");
+    assert.equal(first.terminalRequest.provider, "ticket-intake");
+    const resumed = await app.execute(run.id);
+    assert.equal(resumed.status, "WAITING", resumed.error ?? "");
+    assert.equal(resumed.phases[0].attempts, 1);
+    assert.equal(
+      resumed.terminalRequest.invocationId,
+      first.terminalRequest.invocationId,
+    );
+    assert.match(resumed.terminalCommand, /eng terminal/);
+  } finally {
+    app.close();
+  }
+});
+
+test("multi-repository parent preserves attempts while child awaits terminal approvals", async () => {
+  const { app, root, workspace } = multiFixture();
+  try {
+    const factory = app.factory;
+    app.factory = (p, w, provider) =>
+      provider === "implement"
+        ? new TerminalGeminiRuntime(root, w, p.runtime, false)
+        : factory(p, w, provider);
+    const run = app.multi.create(
+      workspace.id,
+      { key: "ENG-41", description: "Set values" },
+      false,
+      false,
+    );
+    for (let n = 0; n < 3; n++) {
+      const result = await app.execute(run.id);
+      assert.equal(result.status, "WAITING", result.error ?? "");
+      assert.equal(result.children!.length, 1);
+      assert.equal(result.children![0].terminalRequest.provider, "implement");
+      assert.equal(
+        result.phases.find((p) => p.phase_id === "repository-a")!.attempts,
+        1,
+      );
+      assert.equal(
+        app
+          .detail(result.children![0].id)
+          .phases.find((p) => p.phase_id === "implement")!.attempts,
+        1,
+      );
+    }
+  } finally {
+    app.close();
+  }
+});
+
+test("repair handoff resumes the same request before capturing and independently checking edits", async () => {
+  const { app } = productFixture();
+  try {
+    const factory = app.factory;
+    let repairs = 0;
+    let prior: any;
+    app.factory = (p, w, provider) => {
+      const base = factory(p, w, provider);
+      if (provider === "implement")
+        return {
+          ...base,
+          async *run(request, signal) {
+            for await (const event of base.run(request, signal)) {
+              writeFileSync(join(w, "value.cjs"), "module.exports = 2;\n");
+              yield event;
+            }
+          },
+        };
+      if (provider === "repair")
+        return {
+          ...base,
+          async *run(request) {
+            repairs++;
+            if (repairs === 1) {
+              prior = request;
+              writeFileSync(join(w, "value.cjs"), "module.exports = 1;\n");
+              throw new Waiting();
+            }
+            assert.equal(request.invocationId, prior.invocationId);
+            assert.equal(request.prompt, prior.prompt);
+            yield {
+              type: "COMPLETED",
+              payload: {
+                text: JSON.stringify({
+                  summary: "Fixed",
+                  changedFiles: ["value.cjs"],
+                }),
+                exitCode: 0,
+              },
+            };
+          },
+        };
+      return base;
+    };
+    const run = await app.create(
+      "pilot",
+      { key: "ENG-42", description: "Set value" },
+      false,
+      false,
+    );
+    const waiting = await app.execute(run.id);
+    assert.equal(waiting.status, "WAITING", waiting.error ?? "");
+    assert.equal(waiting.verification.results[0].passed, false);
+    const resumed = await app.execute(run.id);
+    assert.equal(resumed.status, "WAITING", resumed.error ?? "");
+    assert.equal(resumed.verification.results[0].passed, true);
+    assert.equal(
+      resumed.phases.find((p) => p.phase_id === "verify")!.attempts,
+      1,
+    );
+    assert.equal(resumed.approvals.length, 1);
+  } finally {
+    app.close();
+  }
+});
+
+test("terminal-mode ticket results retain operator delivery without inventing tool traces", async () => {
+  const { app } = productFixture();
+  try {
+    installMcpFixture(app, { noTool: true });
+    const factory = app.factory;
+    app.factory = (p, w, provider) => ({
+      ...factory(p, w, provider),
+      ...(provider === "ticket-intake"
+        ? { resultDelivery: "operator-paste" as const }
+        : {}),
+    });
+    const run = await app.create("pilot", { key: "ENG-43" }, false, false);
+    const result = await app.execute(run.id);
+    assert.equal(result.status, "WAITING", result.error ?? "");
+    assert.equal(result.ticketProvenance.resultDelivery, "operator-paste");
+    assert.equal(result.ticketProvenance.toolTraceCaptured, false);
+    assert.equal(result.ticketProvenance.observedToolResults, 0);
+  } finally {
+    app.close();
+  }
+});
 
 function installMcpFixture(
   app: Application,

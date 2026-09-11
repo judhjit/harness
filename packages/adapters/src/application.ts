@@ -33,6 +33,10 @@ import { DockerBackend } from "./docker.ts";
 import { Ajv } from "ajv";
 import { MultiRepository } from "./multi-repository.ts";
 import { TicketIntake } from "./ticket-intake.ts";
+import {
+  TerminalGeminiRuntime,
+  assertManagedArguments,
+} from "./terminal-runtime.ts";
 
 export type RuntimeFactory = (
   profile: RepositoryProfile,
@@ -45,6 +49,7 @@ export class Application {
   workspaces: Workspaces;
   factory: RuntimeFactory;
   multi: MultiRepository;
+  terminalAttached = false;
   constructor(root: string, factory?: RuntimeFactory) {
     this.store = new SqliteStore(root);
     this.data = new ProductStore(this.store);
@@ -52,13 +57,34 @@ export class Application {
     this.multi = new MultiRepository(this);
     this.factory =
       factory ??
-      ((p, w, provider) =>
-        new InstalledGeminiRuntime(
-          root,
-          w,
-          p.runtime,
-          !["implement", "repair"].includes(provider),
-        ));
+      ((p, w) => {
+        assertManagedArguments(p.runtime.args);
+        return this.terminalAttached || p.runtime.interaction !== "headless"
+          ? new TerminalGeminiRuntime(root, w, p.runtime, this.terminalAttached)
+          : new InstalledGeminiRuntime(root, w, p.runtime);
+      });
+  }
+  runtimeFor(
+    runId: string,
+    profile: RepositoryProfile,
+    workspace: string,
+    provider: string,
+  ) {
+    const runtime = this.factory(profile, workspace, provider);
+    if (runtime instanceof TerminalGeminiRuntime)
+      runtime.onState = (value) => {
+        this.data.set(
+          runId,
+          "terminal-request",
+          value ? { ...(value as object), provider } : null,
+        );
+        this.store.append(
+          runId,
+          value ? "TERMINAL_HANDOFF" : "TERMINAL_RESULT_RECEIVED",
+          value ?? {},
+        );
+      };
+    return runtime;
   }
   close() {
     this.store.close();
@@ -136,6 +162,15 @@ export class Application {
       p.runtime.args.some((a) => typeof a !== "string")
     )
       throw new HarnessError("INPUT", "Invalid runtime arguments");
+    assertManagedArguments(p.runtime.args);
+    if (
+      p.runtime.interaction &&
+      !["terminal", "headless"].includes(p.runtime.interaction)
+    )
+      throw new HarnessError(
+        "INPUT",
+        "runtime.interaction must be terminal or headless",
+      );
     for (const c of p.checks)
       if (
         !c.id ||
@@ -249,6 +284,8 @@ export class Application {
       owner_pid: undefined,
       ticket: this.data.data(r.id, "ticket") ?? c.ticket,
       ticketProvenance: this.data.data(r.id, "ticket-provenance"),
+      terminalRequest: this.data.data(r.id, "terminal-request"),
+      terminalCommand: `eng terminal ${c.parentRunId ?? r.id} --data '${this.store.root.replaceAll("'", "'\\''")}'`,
       repository:
         c.coordination?.workspace.name ??
         c.product?.repositoryId ??
@@ -263,6 +300,7 @@ export class Application {
             repository: child.config.product.repositoryId,
             candidate: this.data.data(child.id, "candidate"),
             publication: this.data.data(child.id, "publication"),
+            terminalRequest: this.data.data(child.id, "terminal-request"),
           }))
         : undefined,
       crossVerification: this.data.data(r.id, "cross-verification"),
@@ -348,7 +386,7 @@ export class Application {
         "Use the legacy planning CLI to resume this planning-only run",
       );
     const profile = config.product.profile as RepositoryProfile;
-    const runtime = this.factory(profile, profile.path, "intake");
+    const runtime = this.runtimeFor(run.id, profile, profile.path, "intake");
     const handlers: Record<string, PhaseHandler> = {};
     handlers.intake = async ({ attempt, signal }) => {
       const ticket = await new TicketIntake(this).resolve(
@@ -520,7 +558,31 @@ export class Application {
           "Configure at least one required verification command",
         );
       let candidate = this.data.data<Candidate>(run.id, "candidate")!;
-      for (let repair = 0; repair <= profile.repairAttempts; repair++) {
+      const progressKey = `verify-continuation:${attempt.id}`;
+      let progress = this.data.data<{ repair: number; pendingId?: string }>(
+        run.id,
+        progressKey,
+      ) ?? { repair: 0 };
+      while (progress.repair <= profile.repairAttempts) {
+        if (progress.pendingId) {
+          await this.agent(
+            run.id,
+            config,
+            profile,
+            "repair",
+            progress.pendingId,
+            signal,
+            attempt.id,
+          );
+          candidate = this.workspaces.snapshot(
+            run.id,
+            profile,
+            this.data.data<string>(run.id, "base")!,
+          );
+          this.data.set(run.id, "candidate", candidate);
+          progress = { repair: progress.repair + 1 };
+          this.data.set(run.id, progressKey, progress);
+        }
         this.workspaces.verify(candidate);
         const results: CheckResult[] = [];
         for (const check of profile.checks) {
@@ -635,23 +697,9 @@ export class Application {
         });
         if (results.every((r) => !r.command.required || r.passed))
           return { candidate: candidate.revision, results };
-        if (repair < profile.repairAttempts) {
-          await this.agent(
-            run.id,
-            config,
-            profile,
-            "repair",
-            randomUUID(),
-            signal,
-            attempt.id,
-          );
-          candidate = this.workspaces.snapshot(
-            run.id,
-            profile,
-            this.data.data<string>(run.id, "base")!,
-          );
-          this.data.set(run.id, "candidate", candidate);
-        }
+        if (progress.repair >= profile.repairAttempts) break;
+        progress = { repair: progress.repair, pendingId: randomUUID() };
+        this.data.set(run.id, progressKey, progress);
       }
       throw new HarnessError(
         "VALIDATION",
@@ -692,6 +740,34 @@ export class Application {
       if (container) await new DockerBackend(this.store.root).stop(container);
     }
     for (const id of this.data.data<string[]>(runId, "invocations") ?? []) {
+      const terminal = join(this.store.root, "terminal-sessions", id);
+      if (existsSync(join(terminal, "launch.json"))) {
+        if (!existsSync(join(terminal, "process.json")))
+          throw new HarnessError(
+            "INFRASTRUCTURE",
+            "Ambiguous terminal supervisor launch; inspect recorded handoff",
+          );
+        const recorded = [
+          JSON.parse(safeRead(join(terminal, "process.json"))),
+          ...(existsSync(join(terminal, "child.json"))
+            ? [JSON.parse(safeRead(join(terminal, "child.json")))]
+            : []),
+          ...(existsSync(join(terminal, "descendants.json"))
+            ? JSON.parse(safeRead(join(terminal, "descendants.json")))
+            : []),
+        ];
+        for (const p of recorded)
+          if (p.identity && processIdentity(p.pid) === p.identity)
+            throw new HarnessError(
+              "INFRASTRUCTURE",
+              "Previous terminal process is still active; exit it before resuming",
+            );
+        if (!existsSync(join(terminal, "exit.json")))
+          throw new HarnessError(
+            "INFRASTRUCTURE",
+            "Terminal session has no durable exit; manual reconciliation required",
+          );
+      }
       const dir = join(this.store.root, "invocations", id);
       if (
         !existsSync(join(dir, "intent.json")) ||
@@ -850,7 +926,8 @@ export class Application {
       text: prompt,
       hash: hash(prompt),
     });
-    const runtime = this.factory(
+    const runtime = this.runtimeFor(
+      runId,
       profile,
       workspace,
       writeAccess ? "implement" : provider,
@@ -859,12 +936,17 @@ export class Application {
     let output = "";
     let completed = false;
     this.workspaces.identity(runId);
-    const before = git(workspace, [
-      "status",
-      "--porcelain",
-      "--untracked-files=all",
-    ]);
-    const beforeHead = git(workspace, ["rev-parse", "HEAD"]);
+    const baselineKey = `agent-baseline:${invocationId}`;
+    const baseline = this.data.data(runId, baselineKey) ?? {
+      status: git(workspace, [
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+      ]),
+      head: git(workspace, ["rev-parse", "HEAD"]),
+      diff: hash(git(workspace, ["diff", "--binary", "HEAD"])),
+    };
+    this.data.set(runId, baselineKey, baseline);
     try {
       for await (const event of runtime.run(
         { invocationId, prompt, timeoutMs: 600000 },
@@ -890,8 +972,9 @@ export class Application {
       !writeAccess &&
       !["implement", "repair"].includes(provider) &&
       (git(workspace, ["status", "--porcelain", "--untracked-files=all"]) !==
-        before ||
-        git(workspace, ["rev-parse", "HEAD"]) !== beforeHead)
+        baseline.status ||
+        git(workspace, ["rev-parse", "HEAD"]) !== baseline.head ||
+        hash(git(workspace, ["diff", "--binary", "HEAD"])) !== baseline.diff)
     )
       throw new HarnessError("POLICY", "Read-only phase changed workspace");
     let result: any;

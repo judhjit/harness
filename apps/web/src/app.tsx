@@ -42,6 +42,7 @@ const repoExample = {
     args: [],
     environmentNames: [],
     mode: "workstation",
+    interaction: "terminal",
   },
   skills: {},
   repairAttempts: 1,
@@ -370,7 +371,7 @@ function App() {
                   Ticket description{" "}
                   <small>
                     Optional — Gemini retrieves Jira details through your
-                    configured MCP
+                    configured MCP; terminal handoff may be required
                   </small>
                   <textarea
                     value={description}
@@ -475,6 +476,35 @@ function App() {
                 </button>
               </div>
             </section>
+            {detail.status === "WAITING" &&
+              (detail.terminalRequest ||
+                detail.children?.some((c: any) => c.terminalRequest)) && (
+                <section className="panel">
+                  <h2>Terminal approval required</h2>
+                  <p>
+                    Open a VS Code terminal and run the command below with the
+                    same data directory as this server. Gemini approvals happen
+                    in that terminal, not in this browser.
+                  </p>
+                  <pre>{detail.terminalCommand}</pre>
+                  <p>
+                    After each phase, copy Gemini's final JSON, exit Gemini, and
+                    paste it back into the harness. Publication approval remains
+                    separate.
+                  </p>
+                  <Json
+                    value={
+                      detail.terminalRequest ??
+                      detail.children
+                        .filter((c: any) => c.terminalRequest)
+                        .map((c: any) => ({
+                          repository: c.repository,
+                          ...c.terminalRequest,
+                        }))
+                    }
+                  />
+                </section>
+              )}
             {detail.ticket.hierarchy && (
               <section className="panel">
                 <h2>

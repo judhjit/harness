@@ -104,11 +104,11 @@ repair loop follows independently failed checks. Failed attempts and their evide
 remain inspectable. File, prompt and command outputs are artifacts; the run view
 includes timelines, live events, candidate diffs, checks and approvals.
 
-The current installed-CLI profile uses `default` approval mode for investigation/
-review and `auto_edit` for implementation. Other command/MCP approvals still depend
-on the installed Gemini policies. A denied tool may need an approved workstation
-configuration change; the harness does not enable blanket `yolo` mode. Validate
-compatibility with your installed CLI before running real tickets unattended.
+The installed CLI now defaults to **terminal interaction**, inheriting managed
+permissions without `--approval-mode`. Browser runs pause for `eng terminal RUN_ID`;
+approve tools in that VS Code terminal, then paste the final JSON back into the
+harness. See [the terminal workflow](terminal-workflow.md). Approved headless setups
+can explicitly set `runtime.interaction: "headless"`.
 
 ## Integrations and publication
 
@@ -139,9 +139,9 @@ field to the repository profile:
 ```
 
 Use the same directory where Gemini can already read Jira. This starts a fresh
-headless CLI invocation; it does not attach to an existing interactive conversation.
-MCP authentication and read-tool approvals must work noninteractively under the
-installed CLI's normal permissions. The harness does not enable blanket auto-approval,
+CLI invocation; it does not attach to an existing conversation. In terminal mode,
+approve MCP read tools in Gemini and paste its final JSON back into the harness.
+Headless mode requires pre-permitted tools. The harness does not enable blanket auto-approval,
 install an MCP server, or connect directly to the MCP endpoint. If your MCP config
 references environment variables, include the required names in
 `runtime.environmentNames` and start the harness from the configured terminal.
@@ -151,8 +151,9 @@ For a workspace group, the first member with an explicit `ticketSource` supplies
 retrieval configuration; otherwise the first member does. The parent retrieves once
 and shares the validated snapshot, comments and provenance with all children.
 
-The harness validates the ticket key and response structure, requires observed tool
-result activity, records runtime events and saves the snapshot as an artifact. Retries
+The harness validates the ticket key and response structure. Headless mode requires
+observed tool-result activity; terminal mode labels the response as operator-pasted
+without claiming captured tool traces. Both save the snapshot as an artifact. Retries
 reuse a persisted validated snapshot rather than fetching a different ticket version.
 It cannot independently prove that Gemini faithfully reproduced Jira: source URI/tool
 names are model-reported, and the snapshot is labelled **model-mediated, not independently

@@ -523,6 +523,7 @@ export class MultiRepository {
           runId: child.id,
           status: result.status,
         });
+        if (result.status === "WAITING") throw new Waiting();
         if (result.status !== "COMPLETED")
           throw new HarnessError(
             ["FAILED", "CANCELLED"].includes(result.status)

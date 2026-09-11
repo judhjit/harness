@@ -280,7 +280,7 @@ export class InstalledGeminiRuntime extends ProcessRuntime {
     root: string,
     workspace: string,
     config: { executable: string; args: string[]; environmentNames: string[] },
-    readOnly = false,
+    _readOnly = false,
   ) {
     const env = Object.fromEntries(
       ["PATH", "HOME", "USER", "TMPDIR", ...config.environmentNames]
@@ -298,8 +298,6 @@ export class InstalledGeminiRuntime extends ProcessRuntime {
       command: config.executable,
       args: [
         ...config.args,
-        "--approval-mode",
-        readOnly ? "default" : "auto_edit",
         "--output-format",
         "stream-json",
         "--prompt",

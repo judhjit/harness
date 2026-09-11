@@ -177,6 +177,7 @@ export type AgentEvent =
       payload: { text: string; exitCode: number; usage?: unknown };
     };
 export interface AgentRuntime {
+  resultDelivery?: "operator-paste";
   describe(): Promise<RuntimeDescriptor>;
   run(request: AgentRequest, signal: AbortSignal): AsyncIterable<AgentEvent>;
   cancel(invocationId: string): Promise<void>;

@@ -11,7 +11,9 @@ For workspace groups, VS Code workspace import and coordinated changes across
 repositories, see [multi-repository runs](docs/multi-repository.md).
 Ticket descriptions are optional: by default, intake retrieves missing ticket text
 through the installed Gemini CLI's configured Jira MCP. See the product guide for
-workspace directory, environment and headless approval requirements.
+workspace directory and environment requirements. Managed environments requiring
+tool approvals use the [interactive terminal workflow](docs/terminal-workflow.md):
+`eng terminal RUN_ID`. No approval-mode override is added.
 
 ```sh
 npm ci --ignore-scripts
