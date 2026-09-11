@@ -61,7 +61,7 @@ export class InternalClient {
     if (!/^[A-Z][A-Z0-9]*-\d+$/.test(key))
       throw new HarnessError("INPUT", "Invalid Jira key");
     const issue = await this.request(
-      `/rest/api/2/issue/${encodeURIComponent(key)}?fields=summary,description`,
+      `/rest/api/2/issue/${encodeURIComponent(key)}?fields=summary,description,issuetype`,
     );
     return {
       key,
@@ -71,6 +71,10 @@ export class InternalClient {
           ? issue.fields.description
           : JSON.stringify(issue.fields.description),
       acceptanceCriteria: [],
+      issueType: issue.fields.issuetype?.name,
+      isEpic:
+        issue.fields.issuetype?.hierarchyLevel === 1 ||
+        issue.fields.issuetype?.name?.toLowerCase() === "epic",
     };
   }
   async comments(key: string) {

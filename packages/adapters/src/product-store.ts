@@ -112,7 +112,7 @@ export class ProductStore {
           ...r,
           config_json: undefined,
           ticket: c.ticket.key,
-          title: c.ticket.title,
+          title: this.data(r.id, "ticket")?.title ?? c.ticket.title,
           repository:
             c.coordination?.workspace.name ??
             c.product?.repositoryId ??

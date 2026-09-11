@@ -44,6 +44,12 @@ export interface RepositoryProfile {
   repairAttempts: number;
   graph?: GraphProviderConfig;
   contextPages?: string[];
+  ticketSource?: {
+    provider: "gemini-mcp" | "jira-api";
+    cwd?: string;
+    instructions?: string;
+    timeoutMs?: number;
+  };
 }
 export interface Candidate {
   revision: string;
@@ -102,7 +108,7 @@ export const defaultSkills: Record<string, string> = {
   investigate:
     "Investigate the repository and ticket. Do not modify source. Return JSON {summary:string, relevantFiles:string[]}.",
   requirements:
-    'Analyze the ticket. Do not modify source. Return JSON {criteria:[{id:"AC1",description:string}], uncertainties:string[]}.',
+    'Analyze the ticket and any epic hierarchy. Account for every child issue, its status and acceptance criteria; cite child keys in criterion descriptions and flag scope ambiguities instead of silently dropping children. Do not modify source. Return JSON {criteria:[{id:"AC1",description:string}], uncertainties:string[]}.',
   plan: "Propose implementation steps and verification. Do not modify source. Return JSON {steps:[{description:string,criterionIds:string[]}], verification:string[]}.",
   implement:
     "Implement the accepted plan in this workspace. Do not publish, push, change Git metadata, or change harness policies. Return JSON {summary:string, changedFiles:string[]}.",

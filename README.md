@@ -9,6 +9,9 @@ Start with [the product guide](docs/product-guide.md) and
 [pluggable graph providers](docs/graph-providers.md).
 For workspace groups, VS Code workspace import and coordinated changes across
 repositories, see [multi-repository runs](docs/multi-repository.md).
+Ticket descriptions are optional: by default, intake retrieves missing ticket text
+through the installed Gemini CLI's configured Jira MCP. See the product guide for
+workspace directory, environment and headless approval requirements.
 
 ```sh
 npm ci --ignore-scripts

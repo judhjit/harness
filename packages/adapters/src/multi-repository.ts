@@ -23,6 +23,7 @@ import { Coordinator } from "../../core/src/coordinator.ts";
 import { git } from "./commands.ts";
 import { hash, sanitize } from "./files.ts";
 import { ProcessRuntime } from "./runtime.ts";
+import { TicketIntake } from "./ticket-intake.ts";
 
 // VS Code workspace files are JSON with comments and trailing commas, not scripts.
 export function parseWorkspaceJson(text: string): any {
@@ -309,7 +310,7 @@ export class MultiRepository {
       provider: "workspace-intake",
       dependsOn: [],
       output: "shared-ticket",
-      timeoutMs: 60000,
+      timeoutMs: 600000,
       maxAttempts: 3,
     });
     for (const [id, executor] of [
@@ -458,26 +459,18 @@ export class MultiRepository {
       },
     };
     const handlers: Record<string, PhaseHandler> = {};
-    handlers["workspace-intake"] = async ({ attempt }) => {
-      let ticket = config.ticket;
-      const integration = group.members
-        .map(
-          (m) =>
-            (m.config.product!.profile as RepositoryProfile).integrations?.jira,
-        )
-        .find(Boolean);
-      if (!ticket.description && integration) {
-        const client = this.app.client(integration);
-        ticket = await client.ticket(ticket.key);
-        const comments = await client.comments(ticket.key);
-        this.app.data.set(id, "ticket-comments", comments);
-        this.app.store.put(id, attempt.id, "ticket-comments", comments);
-      }
-      if (!ticket.description)
-        throw new HarnessError(
-          "INPUT",
-          "Provide shared ticket text or configure Jira on a member repository",
-        );
+    handlers["workspace-intake"] = async ({ attempt, signal }) => {
+      const profiles = group.members.map(
+        (m) => m.config.product!.profile as RepositoryProfile,
+      );
+      const profile = profiles.find((p) => p.ticketSource) ?? profiles[0];
+      const ticket = await new TicketIntake(this.app).resolve(
+        id,
+        config.ticket,
+        profile,
+        attempt,
+        signal,
+      );
       this.app.data.set(id, "ticket", ticket);
       return ticket;
     };

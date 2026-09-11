@@ -17,6 +17,11 @@ import { Evaluations } from "../packages/adapters/src/evals.ts";
 import { referenceWorkflow } from "../packages/core/src/product.ts";
 import { hash } from "../packages/adapters/src/files.ts";
 import { parseWorkspaceJson } from "../packages/adapters/src/multi-repository.ts";
+import {
+  validateRetrievedTicket,
+  validateTicketHierarchy,
+} from "../packages/adapters/src/ticket-intake.ts";
+import { HarnessError } from "../packages/core/src/contracts.ts";
 
 export function productFixture() {
   const root = fixtureRoot(),
@@ -138,6 +143,333 @@ function multiFixture() {
   });
   return { ...fixture, second, workspace };
 }
+
+function installMcpFixture(
+  app: Application,
+  options: {
+    noTool?: boolean;
+    wrongKey?: boolean;
+    unavailable?: boolean;
+    epic?: boolean;
+    incomplete?: boolean;
+  } = {},
+) {
+  const factory = app.factory,
+    invocations: { cwd: string; prompt: string }[] = [];
+  app.factory = (profile, cwd, provider) =>
+    provider !== "ticket-intake"
+      ? factory(profile, cwd, provider)
+      : {
+          describe: () => factory(profile, cwd, provider).describe(),
+          cancel: async () => {},
+          async *run(request) {
+            invocations.push({ cwd, prompt: request.prompt });
+            if (!options.noTool) {
+              yield {
+                type: "TOOL_REQUESTED",
+                payload: { tool_name: "jira_read_issue" },
+              };
+              yield {
+                type: "TOOL_RESULT",
+                payload: { tool_name: "jira_read_issue", status: "success" },
+              };
+            }
+            const key = request.prompt.match(
+              /Retrieve Jira ticket ([A-Z0-9]+-\d+)/,
+            )![1];
+            const value = options.unavailable
+              ? { error: "Jira MCP is not available" }
+              : {
+                  key: options.wrongKey ? "WRONG-1" : key,
+                  issueType: options.epic ? "Epic" : "Story",
+                  isEpic: !!options.epic,
+                  ...(options.epic
+                    ? {
+                        hierarchy: {
+                          complete: !options.incomplete,
+                          reportedTotal: 2,
+                          items: [
+                            {
+                              key: "ENG-101",
+                              parentKey: key,
+                              issueType: "Story",
+                              status: "In Progress",
+                              title: "Backend contract",
+                              description: "Set the shared value",
+                              acceptanceCriteria: ["Value is one"],
+                              comments: [
+                                { id: "2", body: "Retain compatibility" },
+                              ],
+                              commentsTruncated: false,
+                              source: {
+                                uri: "https://jira.invalid/ENG-101",
+                                tool: "jira_read_issue",
+                              },
+                            },
+                            {
+                              key: "ENG-102",
+                              parentKey: "ENG-101",
+                              issueType: "Sub-task",
+                              status: "Done",
+                              title: "Contract tests",
+                              description: "",
+                              acceptanceCriteria: [],
+                              comments: [],
+                              commentsTruncated: false,
+                              source: {
+                                uri: "https://jira.invalid/ENG-102",
+                                tool: "jira_read_issue",
+                              },
+                            },
+                          ],
+                        },
+                      }
+                    : {}),
+                  title: "Retrieved title",
+                  description: "Set exported value to one",
+                  acceptanceCriteria: ["Value is one"],
+                  comments: [{ id: "1", body: "Keep the public API stable" }],
+                  commentsTruncated: false,
+                  source: {
+                    uri: `https://jira.invalid/browse/${key}`,
+                    tool: "jira_read_issue",
+                  },
+                };
+            yield {
+              type: "COMPLETED",
+              payload: { text: JSON.stringify(value), exitCode: 0 },
+            };
+          },
+        };
+  return invocations;
+}
+
+test("epic intake retrieves nested child details once and includes them in every repository context", async () => {
+  const { app, workspace } = multiFixture();
+  try {
+    const calls = installMcpFixture(app, { epic: true });
+    const run = app.multi.create(workspace.id, { key: "ENG-30" }, false, false);
+    const result = await app.execute(run.id);
+    assert.equal(result.status, "WAITING", result.error ?? "");
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].prompt, /ALL pages/);
+    assert.equal(result.ticket.isEpic, true);
+    assert.equal(result.ticket.hierarchy.items.length, 2);
+    assert.equal(result.ticket.hierarchy.items[1].parentKey, "ENG-101");
+    assert.equal(result.ticket.hierarchy.items[1].status, "Done");
+    for (const child of result.children!) {
+      assert.deepEqual(
+        app.detail(child.id).ticket.hierarchy,
+        result.ticket.hierarchy,
+      );
+      const artifact = app.store
+        .artifacts(child.id)
+        .find((a) => a.role === "context:requirements")!;
+      const context = JSON.parse(app.store.read(artifact));
+      assert.deepEqual(
+        context.items.find((i: any) => i.source === "ticket").content.hierarchy,
+        result.ticket.hierarchy,
+      );
+    }
+  } finally {
+    app.close();
+  }
+});
+
+test("partial epic hierarchy blocks before child runs and implementation", async () => {
+  const { app, workspace } = multiFixture();
+  try {
+    installMcpFixture(app, { epic: true, incomplete: true });
+    const run = app.multi.create(workspace.id, { key: "ENG-31" }, false, false);
+    const result = await app.execute(run.id);
+    assert.equal(result.status, "BLOCKED");
+    assert.match(result.error!, /incomplete/);
+    assert.equal(result.children!.length, 0);
+    assert.equal(result.approvals.length, 0);
+    assert.ok(
+      result.artifacts.some((a) => a.role === "ticket-intake-response"),
+    );
+  } finally {
+    app.close();
+  }
+});
+
+test("epic hierarchy rejects omitted pages, duplicate keys, broken ancestry and missing details", () => {
+  const item = {
+    key: "ENG-2",
+    parentKey: "ENG-1",
+    title: "Child",
+    issueType: "Story",
+    status: "Open",
+    description: "",
+    acceptanceCriteria: [],
+    comments: [],
+    commentsTruncated: false,
+    source: { uri: "jira:ENG-2", tool: "read" },
+  };
+  const valid = {
+    isEpic: true,
+    hierarchy: { complete: true, reportedTotal: 1, items: [item] },
+  };
+  assert.equal(validateTicketHierarchy(valid, "ENG-1")!.items[0].key, "ENG-2");
+  for (const hierarchy of [
+    { ...valid.hierarchy, reportedTotal: 2 },
+    { ...valid.hierarchy, complete: false },
+    { complete: true, reportedTotal: 2, items: [item, item] },
+    { ...valid.hierarchy, items: [{ ...item, parentKey: "ENG-99" }] },
+    { ...valid.hierarchy, items: [{ ...item, parentKey: "ENG-2" }] },
+    { ...valid.hierarchy, items: [{ ...item, description: undefined }] },
+  ])
+    assert.throws(() =>
+      validateTicketHierarchy({ isEpic: true, hierarchy }, "ENG-1"),
+    );
+  assert.throws(
+    () => validateTicketHierarchy({ isEpic: true }, "ENG-1"),
+    /requires/,
+  );
+});
+
+test("blank description retrieves through Gemini MCP in configured directory and exposes provenance", async () => {
+  const { app, repo } = productFixture();
+  try {
+    const cwd = fixtureRoot();
+    app.register({
+      ...app.data.repository("pilot"),
+      ticketSource: {
+        provider: "gemini-mcp",
+        cwd,
+        instructions: "Use the corporate Jira MCP.",
+      },
+    });
+    const calls = installMcpFixture(app);
+    const run = await app.create(
+      "pilot",
+      { key: "ENG-21", description: "   " },
+      false,
+      false,
+    );
+    const result = await app.execute(run.id);
+    assert.equal(result.status, "WAITING", result.error ?? "");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].cwd, cwd);
+    assert.match(calls[0].prompt, /corporate Jira/);
+    assert.equal(result.ticket.title, "Retrieved title");
+    assert.equal(result.ticketProvenance.modelMediated, true);
+    assert.equal(result.ticketProvenance.independentlyVerified, false);
+    assert.equal(app.data.data(run.id, "ticket-comments").comments.length, 1);
+    assert.ok(
+      result.artifacts.some((a) => a.role === "ticket-intake-snapshot"),
+    );
+    assert.equal(
+      readFileSync(join(repo, "value.cjs"), "utf8"),
+      "module.exports = 0;\n",
+    );
+  } finally {
+    app.close();
+  }
+});
+
+test("workspace ticket is fetched once through MCP and shared with every child", async () => {
+  const { app, workspace } = multiFixture();
+  try {
+    const calls = installMcpFixture(app);
+    const run = app.multi.create(workspace.id, { key: "ENG-22" }, false, false);
+    const result = await app.execute(run.id);
+    assert.equal(result.status, "WAITING", result.error ?? "");
+    assert.equal(calls.length, 1);
+    for (const child of result.children!) {
+      assert.deepEqual(app.detail(child.id).ticket, result.ticket);
+      assert.equal(app.detail(child.id).ticketProvenance.modelMediated, true);
+      assert.equal(
+        app.detail(child.id).ticketProvenance.sharedFromRunId,
+        run.id,
+      );
+      assert.equal(
+        app.data.data(child.id, "ticket-comments").comments[0].id,
+        "1",
+      );
+    }
+  } finally {
+    app.close();
+  }
+});
+
+test("supplied descriptions bypass MCP and REST", async () => {
+  const { app } = productFixture();
+  try {
+    const calls = installMcpFixture(app, { unavailable: true });
+    const run = await app.create(
+      "pilot",
+      { key: "ENG-23", description: "Supplied ticket" },
+      false,
+      false,
+    );
+    const result = await app.execute(run.id);
+    assert.equal(result.status, "WAITING", result.error ?? "");
+    assert.equal(calls.length, 0);
+    assert.equal(result.ticketProvenance.provider, "inline");
+  } finally {
+    app.close();
+  }
+});
+
+test("retry after snapshot persistence reuses the same ticket without fetching again", async () => {
+  const { app } = productFixture();
+  try {
+    const calls = installMcpFixture(app);
+    const original = app.store.put.bind(app.store);
+    let interrupt = true;
+    app.store.put = (...args) => {
+      const artifact = original(...args);
+      if (args[2] === "ticket-intake-snapshot" && interrupt) {
+        interrupt = false;
+        throw new HarnessError(
+          "INFRASTRUCTURE",
+          "Simulated interruption after snapshot persistence",
+        );
+      }
+      return artifact;
+    };
+    const run = await app.create("pilot", { key: "ENG-24" }, false, false);
+    assert.equal((await app.execute(run.id)).status, "BLOCKED");
+    const resumed = await app.execute(run.id);
+    assert.equal(resumed.status, "WAITING", resumed.error ?? "");
+    assert.equal(calls.length, 1);
+  } finally {
+    app.close();
+  }
+});
+
+for (const [name, options] of Object.entries({
+  "wrong ticket": { wrongKey: true },
+  "missing tool activity": { noTool: true },
+  "MCP unavailable": { unavailable: true },
+}))
+  test(`ticket intake rejects ${name} before implementation`, async () => {
+    const { app } = productFixture();
+    try {
+      installMcpFixture(app, options);
+      const run = await app.create("pilot", { key: "ENG-25" }, false, false);
+      const result = await app.execute(run.id);
+      assert.equal(result.status, "FAILED", result.error ?? "");
+      assert.ok(!result.candidate);
+      assert.equal(result.approvals.length, 0);
+      assert.ok(
+        !result.artifacts.some((a) => a.role === "ticket-intake-snapshot"),
+      );
+    } finally {
+      app.close();
+    }
+  });
+
+test("retrieved ticket schema rejects missing description, comments and provenance", () => {
+  for (const value of [
+    null,
+    {},
+    { key: "ENG-1", title: "Title", description: "", acceptanceCriteria: [] },
+  ])
+    assert.throws(() => validateRetrievedTicket(value, "ENG-1"), /must return/);
+});
 
 test("workspace import supports JSONC relative folders without executing tasks or overwriting profiles", () => {
   const { app, repo, second, workspace } = multiFixture();

@@ -73,8 +73,10 @@ lifecycle transitions, integration checks and linked publication progress.
 Lifecycle:
 
 1. Freeze group/profile/workflow/skill definitions and every base commit at creation.
-2. Snapshot the shared ticket once. Without supplied text, use the first member's
-   configured Jira integration; all children receive that same snapshot and comments.
+2. Snapshot the shared ticket once. Without supplied text, use the installed Gemini
+   CLI's Jira MCP. The first member with an explicit `ticketSource` supplies the
+   configuration, otherwise the first member does. Explicit `jira-api` retrieval is
+   also available. All children receive that same snapshot, comments and provenance.
 3. Run each child in its own worktree, in dependency order. Per-repository verification
    and review remain required. Terminal approval/publication phases are deferred to the parent.
 4. Run deterministic integration checks against the complete candidate revision set.

@@ -55,6 +55,24 @@ export interface Ticket {
   title: string;
   description: string;
   acceptanceCriteria: string[];
+  issueType?: string;
+  isEpic?: boolean;
+  hierarchy?: {
+    complete: boolean;
+    reportedTotal: number;
+    items: {
+      key: string;
+      parentKey: string;
+      issueType: string;
+      status: string;
+      title: string;
+      description: string;
+      acceptanceCriteria: string[];
+      comments: { id: string; body: string }[];
+      commentsTruncated: boolean;
+      source: { uri: string; tool: string };
+    }[];
+  };
 }
 export interface SourceFile {
   path: string;

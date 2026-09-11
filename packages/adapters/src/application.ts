@@ -32,6 +32,7 @@ import { InternalClient } from "./integrations.ts";
 import { DockerBackend } from "./docker.ts";
 import { Ajv } from "ajv";
 import { MultiRepository } from "./multi-repository.ts";
+import { TicketIntake } from "./ticket-intake.ts";
 
 export type RuntimeFactory = (
   profile: RepositoryProfile,
@@ -91,7 +92,28 @@ export class Application {
       integrations: input.integrations,
       graph: input.graph,
       contextPages: input.contextPages,
+      ticketSource: input.ticketSource,
     };
+    if (p.ticketSource) {
+      const source = p.ticketSource;
+      if (
+        !["gemini-mcp", "jira-api"].includes(source.provider) ||
+        (source.instructions !== undefined &&
+          (typeof source.instructions !== "string" ||
+            source.instructions.length > 20000)) ||
+        (source.timeoutMs !== undefined &&
+          (!Number.isInteger(source.timeoutMs) ||
+            source.timeoutMs < 1000 ||
+            source.timeoutMs > 600000))
+      )
+        throw new HarnessError("INPUT", "Invalid ticketSource profile");
+      if (source.cwd) source.cwd = realpathSync(source.cwd);
+      if (source.provider === "jira-api" && !p.integrations?.jira)
+        throw new HarnessError(
+          "INPUT",
+          "jira-api ticketSource requires integrations.jira",
+        );
+    }
     if (
       !Array.isArray(p.languages) ||
       p.languages.some((l) => !["java", "node", "python", "react"].includes(l))
@@ -191,6 +213,13 @@ export class Application {
         title: ticket.title ?? ticket.key,
         description: ticket.description ?? "",
         acceptanceCriteria: ticket.acceptanceCriteria ?? [],
+        ...(ticket.issueType !== undefined
+          ? { issueType: ticket.issueType }
+          : {}),
+        ...(ticket.isEpic !== undefined ? { isEpic: ticket.isEpic } : {}),
+        ...(ticket.hierarchy !== undefined
+          ? { hierarchy: structuredClone(ticket.hierarchy) }
+          : {}),
       },
       source: {
         repository: profile.path,
@@ -218,7 +247,8 @@ export class Application {
       config_json: undefined,
       owner_identity: undefined,
       owner_pid: undefined,
-      ticket: c.ticket,
+      ticket: this.data.data(r.id, "ticket") ?? c.ticket,
+      ticketProvenance: this.data.data(r.id, "ticket-provenance"),
       repository:
         c.coordination?.workspace.name ??
         c.product?.repositoryId ??
@@ -226,16 +256,14 @@ export class Application {
       parentRunId: c.parentRunId,
       workspace: c.coordination?.workspace,
       children: c.coordination
-        ? this.data
-            .children(r.id)
-            .map((child) => ({
-              id: child.id,
-              display_id: this.store.get(child.id).display_id,
-              status: this.store.get(child.id).status,
-              repository: child.config.product.repositoryId,
-              candidate: this.data.data(child.id, "candidate"),
-              publication: this.data.data(child.id, "publication"),
-            }))
+        ? this.data.children(r.id).map((child) => ({
+            id: child.id,
+            display_id: this.store.get(child.id).display_id,
+            status: this.store.get(child.id).status,
+            repository: child.config.product.repositoryId,
+            candidate: this.data.data(child.id, "candidate"),
+            publication: this.data.data(child.id, "publication"),
+          }))
         : undefined,
       crossVerification: this.data.data(r.id, "cross-verification"),
       phases: this.store.phases(r.id),
@@ -323,18 +351,13 @@ export class Application {
     const runtime = this.factory(profile, profile.path, "intake");
     const handlers: Record<string, PhaseHandler> = {};
     handlers.intake = async ({ attempt, signal }) => {
-      let ticket = config.ticket;
-      if (profile.integrations?.jira && !ticket.description) {
-        const client = this.client(profile.integrations.jira);
-        ticket = await client.ticket(ticket.key);
-        const comments = await client.comments(ticket.key);
-        const snapshot = {
-          ...comments,
-          truncated: comments.total > comments.comments?.length,
-        };
-        this.store.put(run.id, attempt.id, "ticket-comments", snapshot);
-        this.data.set(run.id, "ticket-comments", snapshot);
-      }
+      const ticket = await new TicketIntake(this).resolve(
+        run.id,
+        config.ticket,
+        profile,
+        attempt,
+        signal,
+      );
       if (profile.integrations?.confluence && profile.contextPages?.length) {
         if (profile.contextPages.length > 8)
           throw new HarnessError(
@@ -362,11 +385,6 @@ export class Application {
         }
         this.data.set(run.id, "confluence-pages", pages);
       }
-      if (!ticket.description)
-        throw new HarnessError(
-          "INPUT",
-          "Provide ticket text or configure Jira",
-        );
       const base =
         this.data.data<string>(run.id, "base") ??
         git(profile.path, [
@@ -735,6 +753,7 @@ export class Application {
         source: "ticket",
         selectedBecause: "Run input",
         content: this.data.data(runId, "ticket"),
+        provenance: this.data.data(runId, "ticket-provenance"),
       },
     ];
     if (config.parentRunId)

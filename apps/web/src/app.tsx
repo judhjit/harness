@@ -368,7 +368,10 @@ function App() {
                 </label>
                 <label className="wide">
                   Ticket description{" "}
-                  <small>Optional when Jira is configured</small>
+                  <small>
+                    Optional — Gemini retrieves Jira details through your
+                    configured MCP
+                  </small>
                   <textarea
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
@@ -438,6 +441,12 @@ function App() {
                   {detail.ticket.key} · {detail.ticket.title}
                 </h2>
                 <span className="muted">{detail.repository}</span>
+                {detail.ticketProvenance?.modelMediated && (
+                  <p className="muted">
+                    Ticket retrieved through Gemini/MCP · model-mediated input,
+                    not independently verified
+                  </p>
+                )}
               </div>
               <div className="actions">
                 <button
@@ -466,6 +475,36 @@ function App() {
                 </button>
               </div>
             </section>
+            {detail.ticket.hierarchy && (
+              <section className="panel">
+                <h2>
+                  Epic child items · {detail.ticket.hierarchy.items.length}
+                </h2>
+                <p>
+                  Complete reported hierarchy, including nested subtasks. Source
+                  details remain model-mediated when retrieved through Gemini.
+                </p>
+                {detail.ticket.hierarchy.items.map((item: any) => (
+                  <details key={item.key}>
+                    <summary>
+                      {item.key} · {item.title} · {item.status}
+                    </summary>
+                    <p>
+                      {item.issueType} · Parent: {item.parentKey}
+                    </p>
+                    <pre>{item.description || "No description in Jira"}</pre>
+                    <Json
+                      value={{
+                        acceptanceCriteria: item.acceptanceCriteria,
+                        comments: item.comments,
+                        commentsTruncated: item.commentsTruncated,
+                        source: item.source,
+                      }}
+                    />
+                  </details>
+                ))}
+              </section>
+            )}
             {detail.parentRunId && (
               <section className="panel">
                 <button

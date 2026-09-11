@@ -112,6 +112,85 @@ compatibility with your installed CLI before running real tickets unattended.
 
 ## Integrations and publication
 
+### Optional description: retrieve through Gemini's Jira MCP
+
+Leave the description blank to have the installed Gemini CLI retrieve the ticket and
+comments through its existing Jira MCP. No separate Jira API token is needed for this
+path. Supplying a nonblank description or `--ticket` JSON with a description bypasses
+retrieval. Start a **new run** if an earlier run is already terminal/failed.
+
+```sh
+eng run ENG-428 --repo payments
+eng run ENG-428 --workspace payments-product
+```
+
+Intake launches Gemini from the repository path by default, with the configured
+`runtime` executable, arguments and named environment variables. If your working MCP
+configuration lives in a different VS Code workspace directory, add this optional
+field to the repository profile:
+
+```json
+"ticketSource": {
+  "provider": "gemini-mcp",
+  "cwd": "/workspaces/my-gemini-workspace",
+  "timeoutMs": 120000,
+  "instructions": "Use our corporate Jira MCP read tools to fetch the issue and its comments."
+}
+```
+
+Use the same directory where Gemini can already read Jira. This starts a fresh
+headless CLI invocation; it does not attach to an existing interactive conversation.
+MCP authentication and read-tool approvals must work noninteractively under the
+installed CLI's normal permissions. The harness does not enable blanket auto-approval,
+install an MCP server, or connect directly to the MCP endpoint. If your MCP config
+references environment variables, include the required names in
+`runtime.environmentNames` and start the harness from the configured terminal.
+Keep secrets out of `instructions` and profiles.
+
+For a workspace group, the first member with an explicit `ticketSource` supplies the
+retrieval configuration; otherwise the first member does. The parent retrieves once
+and shares the validated snapshot, comments and provenance with all children.
+
+The harness validates the ticket key and response structure, requires observed tool
+result activity, records runtime events and saves the snapshot as an artifact. Retries
+reuse a persisted validated snapshot rather than fetching a different ticket version.
+It cannot independently prove that Gemini faithfully reproduced Jira: source URI/tool
+names are model-reported, and the snapshot is labelled **model-mediated, not independently
+verified**. Native CLI permissions are not an OS-enforced read-only boundary.
+An unavailable MCP, denied access, wrong key or malformed response blocks progress
+through normal bounded phase failure handling; it never silently invents a ticket.
+
+### Epic child details
+
+For **epics**, the default Gemini/MCP intake reads the issue type, enumerates all
+pages of child issues and recursively retrieves nested subtasks, including completed
+items. Each descendant records its key, immediate parent, type, status, title,
+description, acceptance criteria, comments and claimed source URI/tool. A genuinely
+empty child description is allowed; a missing detail record is not. Comments are
+bounded to 100 per issue, with truncation explicitly recorded.
+
+The flattened hierarchy travels with the shared ticket snapshot into repository
+contexts and is inspectable in the run's **Epic child items** section. Requirements
+instructions account for child keys and flag scope ambiguities, not silently filter
+out completed issues. This does not automatically create one run or PR per Jira child.
+
+Incomplete enumeration, inaccessible children, mismatched counts, duplicate keys,
+cycles or missing parents stop intake before implementation. The safety caps are
+200 descendants and 400 KB of retrieval output; split larger epics into child-scoped
+runs. Counts, parent relationships and completeness remain model-reported, not proof
+that Jira permissions exposed every issue. No independent completeness claim is made.
+
+Inline descriptions still bypass remote fetching. To supply a known epic offline,
+include `isEpic: true` and a complete `hierarchy` in the ticket JSON (the schema is in
+`Ticket` in `packages/core/src/contracts.ts`). Existing snapshots are not automatically
+expanded; start a new run to retrieve an epic hierarchy.
+
+Direct Jira API epic expansion is not implemented: recognized epics on that path
+are blocked with instructions to use Gemini/MCP or a complete supplied snapshot.
+Custom Jira type names should use the MCP path with deployment-specific guidance.
+
+### Optional direct API connections
+
 Import a trusted connection profile with `eng integration add integration.json`:
 
 ```json
@@ -129,7 +208,10 @@ timeouts, explicit paths and bearer-token environment references. Internal versi
 authentication extensions and deployment-specific fields still require validation
 against your actual systems. There is no implicit public-cloud API fallback.
 
-Set repository `integrations.jira` to its connection ID to retrieve tickets.
+For direct Jira API retrieval instead of Gemini/MCP, set repository
+`integrations.jira` to its connection ID **and** set
+`"ticketSource": {"provider": "jira-api"}`. An API failure does not silently fall
+back to a different source.
 Configure `stash`, `project` and `slug` for publication, with an explicit branch
 name in `base`. Without Stash, approval completes a local candidate; it does not
 pretend a PR was published.
