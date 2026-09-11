@@ -75,13 +75,21 @@ export function createApi(
           return send(200, app.data.listRuns());
         if (path === "/api/v1/runs" && method === "POST") {
           const input = await body(req);
+          if (input.workspaceId && input.repositoryId)
+            throw new Error("Choose repositoryId or workspaceId, not both");
           return send(
             201,
-            await app.create(
-              input.repositoryId,
-              input.ticket,
-              !!input.graphContext,
-            ),
+            input.workspaceId
+              ? app.multi.create(
+                  input.workspaceId,
+                  input.ticket,
+                  !!input.graphContext,
+                )
+              : await app.create(
+                  input.repositoryId,
+                  input.ticket,
+                  !!input.graphContext,
+                ),
           );
         }
         if (parts[2] === "runs" && parts[3]) {
@@ -118,6 +126,8 @@ export function createApi(
             return;
           }
           if (parts[4] === "cancel" && method === "POST") {
+            if (JSON.parse(run.config_json).parentRunId)
+              throw new Error("Cancel the parent run, not an individual child");
             app.store.requestCancel(run.id);
             return send(202, { requested: true });
           }
@@ -126,6 +136,8 @@ export function createApi(
             return send(201, app.proposeComments(run.id, input.findingIds));
           }
           if (parts[4] === "resume" && method === "POST") {
+            if (JSON.parse(run.config_json).parentRunId)
+              throw new Error("Resume the parent run, not an individual child");
             if (["FAILED", "COMPLETED", "CANCELLED"].includes(run.status))
               throw new Error(
                 "Terminal runs cannot be resumed; create a new run",
@@ -145,6 +157,14 @@ export function createApi(
           return send(200, app.data.repositories());
         if (path === "/api/v1/repositories" && method === "POST")
           return send(201, app.register(await body(req)));
+        if (path === "/api/v1/workspaces" && method === "GET")
+          return send(200, app.data.workspaceGroups());
+        if (path === "/api/v1/workspaces" && method === "POST")
+          return send(201, app.multi.register(await body(req)));
+        if (path === "/api/v1/workspaces/import" && method === "POST") {
+          const input = await body(req);
+          return send(201, app.multi.importWorkspace(input.id, input.path));
+        }
         if (path === "/api/v1/integrations" && method === "GET")
           return send(200, app.data.integrations());
         if (path === "/api/v1/integrations" && method === "POST") {

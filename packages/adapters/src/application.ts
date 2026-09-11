@@ -31,6 +31,7 @@ import { ExternalGraphProvider } from "./graph.ts";
 import { InternalClient } from "./integrations.ts";
 import { DockerBackend } from "./docker.ts";
 import { Ajv } from "ajv";
+import { MultiRepository } from "./multi-repository.ts";
 
 export type RuntimeFactory = (
   profile: RepositoryProfile,
@@ -42,10 +43,12 @@ export class Application {
   data: ProductStore;
   workspaces: Workspaces;
   factory: RuntimeFactory;
+  multi: MultiRepository;
   constructor(root: string, factory?: RuntimeFactory) {
     this.store = new SqliteStore(root);
     this.data = new ProductStore(this.store);
     this.workspaces = new Workspaces(root);
+    this.multi = new MultiRepository(this);
     this.factory =
       factory ??
       ((p, w, provider) =>
@@ -164,6 +167,17 @@ export class Application {
     enqueue = true,
   ) {
     const profile = this.data.repository(repositoryId);
+    const config = this.buildConfig(profile, ticket, graphContext);
+    const run = this.store.create(config);
+    if (enqueue) this.data.enqueue(run.id);
+    return this.detail(run.id);
+  }
+  buildConfig(
+    profile: RepositoryProfile,
+    ticket: Partial<Ticket> & { key: string },
+    graphContext = false,
+  ): RunConfig {
+    const repositoryId = profile.id;
     if (!/^[A-Z][A-Z0-9]*-\d+$/.test(ticket.key))
       throw new HarnessError("INPUT", "Invalid ticket key");
     const skills = { ...defaultSkills, ...profile.skills };
@@ -194,9 +208,7 @@ export class Application {
         isolation: "workstation",
       },
     };
-    const run = this.store.create(config);
-    if (enqueue) this.data.enqueue(run.id);
-    return this.detail(run.id);
+    return config;
   }
   detail(id: string) {
     const r = this.store.get(id);
@@ -207,7 +219,25 @@ export class Application {
       owner_identity: undefined,
       owner_pid: undefined,
       ticket: c.ticket,
-      repository: c.product?.repositoryId ?? c.source.repository,
+      repository:
+        c.coordination?.workspace.name ??
+        c.product?.repositoryId ??
+        c.source.repository,
+      parentRunId: c.parentRunId,
+      workspace: c.coordination?.workspace,
+      children: c.coordination
+        ? this.data
+            .children(r.id)
+            .map((child) => ({
+              id: child.id,
+              display_id: this.store.get(child.id).display_id,
+              status: this.store.get(child.id).status,
+              repository: child.config.product.repositoryId,
+              candidate: this.data.data(child.id, "candidate"),
+              publication: this.data.data(child.id, "publication"),
+            }))
+        : undefined,
+      crossVerification: this.data.data(r.id, "cross-verification"),
       phases: this.store.phases(r.id),
       artifacts: this.store.artifacts(r.id),
       candidate: this.data.data(r.id, "candidate"),
@@ -271,9 +301,19 @@ export class Application {
       }
     return results;
   }
-  async execute(identifier: string, signal?: AbortSignal) {
+  async execute(
+    identifier: string,
+    signal?: AbortSignal,
+    parentId?: string,
+  ): Promise<ReturnType<Application["detail"]>> {
     const run = this.store.get(identifier);
     const config: RunConfig = JSON.parse(run.config_json);
+    if (config.parentRunId && config.parentRunId !== parentId)
+      throw new HarnessError(
+        "POLICY",
+        "Resume the parent multi-repository run, not an individual child",
+      );
+    if (config.coordination) return this.multi.execute(run.id, signal);
     if (!config.product)
       throw new HarnessError(
         "INPUT",
@@ -697,6 +737,12 @@ export class Application {
         content: this.data.data(runId, "ticket"),
       },
     ];
+    if (config.parentRunId)
+      items.push({
+        source: "coordination",
+        selectedBecause: "Repository scope and completed dependency candidates",
+        content: this.data.data(runId, "coordination-context"),
+      });
     if (["investigate", "requirements", "plan"].includes(provider)) {
       const comments = this.data.data(runId, "ticket-comments");
       if (comments)
@@ -904,12 +950,14 @@ export class Application {
       this.store.get(approval.run_id).config_json,
     );
     const current =
-      approval.subject.type === "review-comments"
-        ? this.commentSubject(approval.run_id, approval.subject.findingIds)
-        : this.publicationSubject(
-            approval.run_id,
-            config.product!.profile as RepositoryProfile,
-          );
+      approval.subject.type === "linked-publication"
+        ? this.multi.subject(approval.run_id)
+        : approval.subject.type === "review-comments"
+          ? this.commentSubject(approval.run_id, approval.subject.findingIds)
+          : this.publicationSubject(
+              approval.run_id,
+              config.product!.profile as RepositoryProfile,
+            );
     if (hash(JSON.stringify(current)) !== subjectHash)
       throw new HarnessError(
         "POLICY",
@@ -1065,14 +1113,17 @@ export class Application {
   }
   async publish(runId: string, profile: RepositoryProfile) {
     const subject = this.publicationSubject(runId, profile);
-    const approved = this.data
-      .approvals()
-      .find(
-        (a) =>
-          a.run_id === runId &&
-          a.subject_hash === hash(JSON.stringify(subject)) &&
-          a.status === "APPROVED",
-      );
+    const config: RunConfig = JSON.parse(this.store.get(runId).config_json);
+    const approved = config.parentRunId
+      ? this.multi.authorizeChild(config.parentRunId, runId)
+      : this.data
+          .approvals()
+          .find(
+            (a) =>
+              a.run_id === runId &&
+              a.subject_hash === hash(JSON.stringify(subject)) &&
+              a.status === "APPROVED",
+          );
     if (!approved)
       throw new HarnessError(
         "POLICY",
@@ -1096,7 +1147,11 @@ export class Application {
     const prior = this.store.db
       .prepare("SELECT * FROM external_actions WHERE id=?")
       .get(key) as any;
-    if (prior?.status === "COMPLETED") return JSON.parse(prior.response_json);
+    if (prior?.status === "COMPLETED") {
+      const result = JSON.parse(prior.response_json);
+      this.data.set(runId, "publication", result);
+      return result;
+    }
     const existing = await client.findPR(
       integration.project,
       integration.slug,
@@ -1145,7 +1200,7 @@ export class Application {
         "POST",
         {
           title: this.data.data<Ticket>(runId, "ticket")!.title,
-          description: `${marker}\nGenerated from ${this.store.get(runId).display_id}; verification and review recorded locally.`,
+          description: `${marker}\nGenerated from ${this.store.get(runId).display_id}; verification and review recorded locally.${config.parentRunId ? `\nLinked engineering run: ${this.store.get(config.parentRunId).display_id}\nCompanion repositories: ${this.multi.repositoryNames(config.parentRunId).join(", ")}. See the parent run for the complete PR set.` : ""}`,
           fromRef: {
             id: `refs/heads/${branch}`,
             repository: {

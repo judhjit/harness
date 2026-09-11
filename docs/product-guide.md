@@ -26,6 +26,9 @@ is a single-operator application, not a multi-user identity system.
 
 ## Register repositories and your nine phases
 
+For workspace grouping, VS Code multi-root import, coordinated multi-repository runs
+and linked approvals, see [the multi-repository guide](multi-repository.md).
+
 Copy a profile from `examples/profiles/`, replace its local path/base and check
 commands, then import it:
 

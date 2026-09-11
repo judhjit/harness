@@ -53,6 +53,31 @@ function App() {
   const [notice, setNotice] = useState("");
   const [runs, setRuns] = useState<any[]>([]);
   const [repos, setRepos] = useState<any[]>([]);
+  const [workspaces, setWorkspaces] = useState<any[]>([]);
+  const [workspaceId, setWorkspaceId] = useState("");
+  const [workspaceEditor, setWorkspaceEditor] = useState(
+    JSON.stringify(
+      {
+        id: "product",
+        name: "Product",
+        repositories: [{ repositoryId: "service", dependsOn: [] }],
+        checks: [
+          {
+            id: "integration",
+            executable: "npm",
+            args: ["test"],
+            cwdRepository: "service",
+            required: true,
+            timeoutMs: 300000,
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  const [importId, setImportId] = useState("");
+  const [importPath, setImportPath] = useState("");
   const [approvals, setApprovals] = useState<any[]>([]);
   const [evals, setEvals] = useState<any[]>([]);
   const [detail, setDetail] = useState<any>();
@@ -82,16 +107,18 @@ function App() {
     }
   };
   const refresh = async () => {
-    const [a, b, c, d] = await Promise.all([
+    const [a, b, c, d, w] = await Promise.all([
       api("/runs"),
       api("/repositories"),
       api("/approvals"),
       api("/evals"),
+      api("/workspaces"),
     ]);
     setRuns(a);
     setRepos(b);
     setApprovals(c);
     setEvals(d);
+    setWorkspaces(w);
     if (!repo && b[0]) setRepo(b[0].id);
   };
   useEffect(() => {
@@ -199,6 +226,7 @@ function App() {
           {[
             "Runs",
             "Repositories",
+            "Workspaces",
             "Graph",
             "Evals",
             "Approvals",
@@ -288,7 +316,9 @@ function App() {
                   e.preventDefault();
                   void act(async () => {
                     const run = await api("/runs", {
-                      repositoryId: repo,
+                      ...(workspaceId
+                        ? { workspaceId }
+                        : { repositoryId: repo }),
                       ticket: { key, title: key, description },
                       graphContext,
                     });
@@ -297,11 +327,26 @@ function App() {
                 }}
               >
                 <label>
+                  Workspace group (optional)
+                  <select
+                    value={workspaceId}
+                    onChange={(e) => setWorkspaceId(e.target.value)}
+                  >
+                    <option value="">Single repository</option>
+                    {workspaces.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.name} · {w.repositories.length} repos
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
                   Repository
                   <select
                     value={repo}
                     onChange={(e) => setRepo(e.target.value)}
-                    required
+                    required={!workspaceId}
+                    disabled={!!workspaceId}
                   >
                     <option value="">Select repository</option>
                     {repos.map((r) => (
@@ -397,6 +442,7 @@ function App() {
               <div className="actions">
                 <button
                   className="secondary"
+                  disabled={!!detail.parentRunId}
                   onClick={() =>
                     void act(async () => {
                       await api(`/runs/${detail.id}/resume`, {});
@@ -408,6 +454,7 @@ function App() {
                 </button>
                 <button
                   className="danger"
+                  disabled={!!detail.parentRunId}
                   onClick={() =>
                     void act(async () => {
                       await api(`/runs/${detail.id}/cancel`, {});
@@ -419,6 +466,55 @@ function App() {
                 </button>
               </div>
             </section>
+            {detail.parentRunId && (
+              <section className="panel">
+                <button
+                  onClick={() => void act(() => openRun(detail.parentRunId))}
+                >
+                  Open parent run →
+                </button>
+                <p>
+                  Candidate execution complete does not mean published.
+                  Publication is controlled by the parent approval.
+                </p>
+              </section>
+            )}
+            {detail.children && (
+              <section className="panel">
+                <h2>Repository candidates and linked PRs</h2>
+                <p>
+                  Each repository has independent evidence. Publication is
+                  sequential and may partially succeed.
+                </p>
+                {detail.children.map((child: any) => (
+                  <div className="artifact" key={child.id}>
+                    <button
+                      className="link"
+                      onClick={() => void act(() => openRun(child.id))}
+                    >
+                      {child.repository} · {child.display_id} →
+                    </button>
+                    <Badge status={child.status} />
+                    <small>
+                      Revision: {child.candidate?.revision ?? "Pending"}
+                    </small>
+                    <small>
+                      {child.publication?.id
+                        ? `PR #${child.publication.id}`
+                        : child.publication?.mode === "local"
+                          ? "Local candidate finalized"
+                          : "Not published"}
+                    </small>
+                    {child.publication && <Json value={child.publication} />}
+                  </div>
+                ))}
+                <h3>Cross-repository verification</h3>
+                <Json
+                  value={detail.crossVerification ?? { status: "Pending" }}
+                />
+                {detail.publication && <Json value={detail.publication} />}
+              </section>
+            )}
             <div className="tabs">
               {[
                 "Overview",
@@ -669,6 +765,90 @@ function App() {
             </section>
           </div>
         )}
+        {page === "Workspaces" && (
+          <div className="columns">
+            <section className="panel">
+              <h2>Workspace groups</h2>
+              {workspaces.map((w) => (
+                <button
+                  className="artifact"
+                  key={w.id}
+                  onClick={() => setWorkspaceEditor(JSON.stringify(w, null, 2))}
+                >
+                  {w.name}
+                  <small>
+                    {w.repositories.map((r: any) => r.repositoryId).join(" · ")}
+                  </small>
+                </button>
+              ))}
+              <h3>Import VS Code workspace</h3>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void act(async () => {
+                    const result = await api("/workspaces/import", {
+                      id: importId,
+                      path: importPath,
+                    });
+                    setWorkspaceEditor(
+                      JSON.stringify(result.workspace, null, 2),
+                    );
+                    await refresh();
+                    setNotice(result.note);
+                  });
+                }}
+              >
+                <label>
+                  New workspace ID
+                  <input
+                    required
+                    value={importId}
+                    onChange={(e) => setImportId(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Local .code-workspace path
+                  <input
+                    required
+                    value={importPath}
+                    onChange={(e) => setImportPath(e.target.value)}
+                    placeholder="/workspaces/product.code-workspace"
+                  />
+                </label>
+                <button>Import folders</button>
+              </form>
+              <p>
+                Folder paths only. Tasks and settings are never imported or
+                executed.
+              </p>
+            </section>
+            <section className="panel">
+              <h2>Workspace profile</h2>
+              <p>
+                List repositories in dependency order. Configure required
+                integration checks using argument placeholders such as{" "}
+                {"{workspace:service}"}. Changes apply to new runs.
+              </p>
+              <textarea
+                className="editor"
+                aria-label="Workspace profile JSON"
+                value={workspaceEditor}
+                onChange={(e) => setWorkspaceEditor(e.target.value)}
+              />
+              <button
+                onClick={() =>
+                  void act(async () => {
+                    await api("/workspaces", JSON.parse(workspaceEditor));
+                    await refresh();
+                    setNotice("Workspace profile saved.");
+                  })
+                }
+              >
+                Save workspace
+              </button>
+            </section>
+          </div>
+        )}
         {page === "Approvals" && (
           <>
             {!approvals.length && (
@@ -679,11 +859,17 @@ function App() {
             {approvals.map((a) => (
               <section className="panel" key={a.id}>
                 <div className="run-heading">
-                  <h2>{a.subject.repository}</h2>
+                  <h2>{a.subject.workspace ?? a.subject.repository}</h2>
                   <Badge status={a.status} />
                 </div>
                 <p>
-                  Candidate <code>{a.subject.candidate}</code>
+                  {a.subject.type === "linked-publication" ? (
+                    `${a.subject.candidates.length} candidates · one revision-bound approval · non-atomic publication`
+                  ) : (
+                    <>
+                      Candidate <code>{a.subject.candidate}</code>
+                    </>
+                  )}
                 </p>
                 <p>Proposed effects: {a.subject.effects.join(", ")}</p>
                 <button
@@ -720,7 +906,9 @@ function App() {
                         })
                       }
                     >
-                      Approve this candidate
+                      {a.subject.type === "linked-publication"
+                        ? "Approve repository set"
+                        : "Approve this candidate"}
                     </button>
                   </div>
                 )}

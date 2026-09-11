@@ -1,0 +1,30 @@
+{
+  "id": "payments",
+  "name": "Payments product",
+  "repositories": [
+    {
+      "repositoryId": "payments-api",
+      "dependsOn": [],
+      "task": "Implement the backend contract for this ticket."
+    },
+    {
+      "repositoryId": "payments-ui",
+      "dependsOn": ["payments-api"],
+      "task": "Implement the frontend against the backend candidate contract."
+    }
+  ],
+  "checks": [
+    {
+      "id": "api-ui-contract",
+      "executable": "node",
+      "args": [
+        "/path/to/trusted-checks/payments-contract.mjs",
+        "{workspace:payments-api}",
+        "{workspace:payments-ui}"
+      ],
+      "cwdRepository": "payments-ui",
+      "required": true,
+      "timeoutMs": 300000
+    }
+  ]
+}

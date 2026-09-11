@@ -75,6 +75,11 @@ export interface RuntimeDescriptor {
   isolation: string;
 }
 export interface RunConfig {
+  parentRunId?: string;
+  coordination?: {
+    workspace: import("./product.ts").WorkspaceGroup;
+    members: { repositoryId: string; config: RunConfig }[];
+  };
   product?: {
     repositoryId: string;
     profile: unknown;

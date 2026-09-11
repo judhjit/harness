@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { SqliteStore } from "./sqlite.ts";
 import { hash } from "./files.ts";
 import { HarnessError } from "../../core/src/contracts.ts";
-import type { RepositoryProfile } from "../../core/src/product.ts";
+import type {
+  RepositoryProfile,
+  WorkspaceGroup,
+} from "../../core/src/product.ts";
 import type { IntegrationConfig } from "./integrations.ts";
 
 export class ProductStore {
@@ -11,6 +14,7 @@ export class ProductStore {
     this.store = store;
     store.db.exec(`
     CREATE TABLE IF NOT EXISTS repository_profiles(id TEXT PRIMARY KEY,profile_json TEXT NOT NULL,updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS workspace_groups(id TEXT PRIMARY KEY,profile_json TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS integration_profiles(id TEXT PRIMARY KEY,config_json TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS jobs(run_id TEXT PRIMARY KEY REFERENCES runs(id),status TEXT NOT NULL,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS run_data(run_id TEXT NOT NULL REFERENCES runs(id),key TEXT NOT NULL,value_json TEXT NOT NULL,PRIMARY KEY(run_id,key));
@@ -25,6 +29,27 @@ export class ProductStore {
       .prepare("SELECT profile_json FROM repository_profiles ORDER BY id")
       .all()
       .map((r: any) => JSON.parse(r.profile_json));
+  }
+  workspaceGroups(): WorkspaceGroup[] {
+    return this.store.db
+      .prepare("SELECT profile_json FROM workspace_groups ORDER BY id")
+      .all()
+      .map((r: any) => JSON.parse(r.profile_json));
+  }
+  saveWorkspace(group: WorkspaceGroup) {
+    this.store.db
+      .prepare(
+        "INSERT INTO workspace_groups VALUES(?,?) ON CONFLICT(id) DO UPDATE SET profile_json=excluded.profile_json",
+      )
+      .run(group.id, JSON.stringify(group));
+  }
+  children(parentId: string) {
+    return this.store.db
+      .prepare(
+        "SELECT id,config_json FROM runs WHERE json_extract(config_json,'$.parentRunId')=? ORDER BY display_id",
+      )
+      .all(parentId)
+      .map((r: any) => ({ id: r.id, config: JSON.parse(r.config_json) }));
   }
   repository(id: string) {
     const p = this.repositories().find((p) => p.id === id);
@@ -88,7 +113,12 @@ export class ProductStore {
           config_json: undefined,
           ticket: c.ticket.key,
           title: c.ticket.title,
-          repository: c.product?.repositoryId ?? c.source.repository,
+          repository:
+            c.coordination?.workspace.name ??
+            c.product?.repositoryId ??
+            c.source.repository,
+          parentRunId: c.parentRunId,
+          workspaceId: c.coordination?.workspace.id,
         };
       });
   }

@@ -28,6 +28,8 @@ eng resume RUN_ID
 eng graph search-text --repo registered-id
 eng eval run suite.json
 eng approve APPROVAL_ID --hash SUBJECT_HASH
+eng workspace list | add profile.json | import GROUP_ID file.code-workspace
+eng run JIRA-428 --workspace GROUP_ID --ticket ticket.json
 
 node apps/cli/src/main.ts run JIRA-428 --repo /repo --ticket ticket.json --files src/a.ts --runtime runtime.json
 node apps/cli/src/main.ts status ENG-2026-000001
@@ -173,12 +175,22 @@ if (!(await productCli(process.argv.slice(2)))) {
         }
       } else {
         const run = store.get(identifier);
+        const runConfig = JSON.parse(run.config_json);
         if (command === "status")
           print({
             id: run.display_id,
             status: run.status,
             error: run.error,
             cancellationRequested: !!run.cancel_requested,
+            parentRunId: runConfig.parentRunId,
+            workspace: runConfig.coordination?.workspace,
+            children: runConfig.coordination
+              ? store.db
+                  .prepare(
+                    "SELECT id,display_id,status,json_extract(config_json,'$.product.repositoryId') repository FROM runs WHERE json_extract(config_json,'$.parentRunId')=? ORDER BY display_id",
+                  )
+                  .all(run.id)
+              : undefined,
             phases: store.phases(run.id),
             artifacts: store.artifacts(run.id),
           });
@@ -192,6 +204,11 @@ if (!(await productCli(process.argv.slice(2)))) {
           for (const event of store.events(run.id, after)) print(event);
         }
         if (command === "cancel") {
+          if (runConfig.parentRunId)
+            throw new HarnessError(
+              "POLICY",
+              "Cancel the parent run, not an individual child",
+            );
           store.requestCancel(run.id);
           print({
             id: run.display_id,

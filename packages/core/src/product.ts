@@ -10,6 +10,12 @@ export interface CommandProfile {
   minTests?: number;
   dockerImage?: string;
 }
+export interface WorkspaceGroup {
+  id: string;
+  name: string;
+  repositories: { repositoryId: string; dependsOn: string[]; task?: string }[];
+  checks: (CommandProfile & { cwdRepository: string })[];
+}
 export interface RepositoryProfile {
   id: string;
   name: string;

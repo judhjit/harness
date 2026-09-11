@@ -16,6 +16,7 @@ export async function productCli(args: string[]): Promise<boolean> {
     "serve",
     "doctor",
     "repo",
+    "workspace",
     "integration",
     "graph",
     "eval",
@@ -35,6 +36,7 @@ export async function productCli(args: string[]): Promise<boolean> {
       options: {
         data: { type: "string" },
         repo: { type: "string" },
+        workspace: { type: "string" },
         profile: { type: "string" },
         ticket: { type: "string" },
         port: { type: "string" },
@@ -62,6 +64,16 @@ export async function productCli(args: string[]): Promise<boolean> {
       else if (arg === "add" && extra)
         print(app.register(JSON.parse(readFileSync(extra, "utf8"))));
       else throw new Error("Usage: eng repo add profile.json | eng repo list");
+    } else if (cmd === "workspace") {
+      if (arg === "list") print(app.data.workspaceGroups());
+      else if (arg === "add" && extra)
+        print(app.multi.register(JSON.parse(readFileSync(extra, "utf8"))));
+      else if (arg === "import" && extra && positionals[3])
+        print(app.multi.importWorkspace(extra, positionals[3]));
+      else
+        throw new Error(
+          "Usage: eng workspace list | add profile.json | import GROUP_ID file.code-workspace",
+        );
     } else if (cmd === "integration") {
       if (arg === "list") print(app.data.integrations());
       else if (arg === "add" && extra) {
@@ -72,20 +84,31 @@ export async function productCli(args: string[]): Promise<boolean> {
       } else throw new Error("Usage: eng integration add profile.json | list");
     } else if (cmd === "run") {
       const repository = values.profile ?? values.repo;
-      if (!repository || !arg)
+      if (
+        (!repository && !values.workspace) ||
+        (repository && values.workspace) ||
+        !arg
+      )
         throw new Error(
-          "Usage: eng run JIRA-428 --repo registered-id [--ticket ticket.json] [--graph-context]",
+          "Usage: eng run JIRA-428 (--repo registered-id | --workspace group-id) [--ticket ticket.json] [--graph-context]",
         );
       const ticket = values.ticket
         ? JSON.parse(readFileSync(values.ticket, "utf8"))
         : { key: arg };
       if (ticket.key !== arg) throw new Error("Ticket key mismatch");
-      const run = await app.create(
-        repository,
-        ticket,
-        !!values["graph-context"],
-        false,
-      );
+      const run = values.workspace
+        ? app.multi.create(
+            values.workspace,
+            ticket,
+            !!values["graph-context"],
+            false,
+          )
+        : await app.create(
+            repository!,
+            ticket,
+            !!values["graph-context"],
+            false,
+          );
       console.error(`Created ${run.display_id}`);
       const controller = new AbortController();
       const stop = () => controller.abort();

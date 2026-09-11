@@ -7,6 +7,8 @@ graph providers, eval comparisons and publication adapters. It uses the existing
 
 Start with [the product guide](docs/product-guide.md) and
 [pluggable graph providers](docs/graph-providers.md).
+For workspace groups, VS Code workspace import and coordinated changes across
+repositories, see [multi-repository runs](docs/multi-repository.md).
 
 ```sh
 npm ci --ignore-scripts
