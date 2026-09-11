@@ -1,0 +1,31 @@
+{
+  "id": "react-app",
+  "name": "React app",
+  "path": "/replace/with/repository",
+  "base": "main",
+  "languages": ["react", "node"],
+  "checks": [
+    {
+      "id": "build",
+      "executable": "npm",
+      "args": ["run", "build"],
+      "timeoutMs": 300000,
+      "required": true
+    },
+    {
+      "id": "tests",
+      "executable": "npm",
+      "args": ["test"],
+      "timeoutMs": 300000,
+      "required": true
+    }
+  ],
+  "runtime": {
+    "executable": "gemini",
+    "args": [],
+    "environmentNames": [],
+    "mode": "workstation"
+  },
+  "skills": {},
+  "repairAttempts": 1
+}

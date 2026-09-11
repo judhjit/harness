@@ -1,0 +1,5 @@
+{
+  "name": "@eng/cli",
+  "private": true,
+  "type": "module"
+}

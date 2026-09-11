@@ -1,0 +1,32 @@
+{
+  "name": "pilot-graph-context",
+  "repetitions": 1,
+  "cases": [
+    {
+      "id": "retry-case",
+      "repositoryId": "node-service",
+      "ticket": {
+        "key": "ENG-428",
+        "title": "Add retry",
+        "description": "Retry transient errors once; preserve permanent errors.",
+        "acceptanceCriteria": [
+          "Retry transient failures once",
+          "Do not retry permanent failures"
+        ]
+      },
+      "expectedFiles": ["src/service.ts"],
+      "scorers": [
+        {
+          "id": "held-out-behavior",
+          "executable": "node",
+          "args": ["/path/outside/repository/scorer.cjs", "{workspace}"],
+          "timeoutMs": 30000
+        }
+      ]
+    }
+  ],
+  "variants": [
+    { "id": "control", "graphContext": false },
+    { "id": "graph-context", "graphContext": true }
+  ]
+}

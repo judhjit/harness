@@ -1,0 +1,24 @@
+{
+  "id": "python-service",
+  "name": "Python service",
+  "path": "/replace/with/repository",
+  "base": "main",
+  "languages": ["python"],
+  "checks": [
+    {
+      "id": "tests",
+      "executable": "python3",
+      "args": ["-m", "pytest"],
+      "timeoutMs": 300000,
+      "required": true
+    }
+  ],
+  "runtime": {
+    "executable": "gemini",
+    "args": [],
+    "environmentNames": [],
+    "mode": "workstation"
+  },
+  "skills": {},
+  "repairAttempts": 1
+}

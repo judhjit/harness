@@ -1,0 +1,24 @@
+{
+  "id": "node-service",
+  "name": "Node service",
+  "path": "/replace/with/repository",
+  "base": "main",
+  "languages": ["node"],
+  "checks": [
+    {
+      "id": "tests",
+      "executable": "npm",
+      "args": ["test"],
+      "timeoutMs": 300000,
+      "required": true
+    }
+  ],
+  "runtime": {
+    "executable": "gemini",
+    "args": [],
+    "environmentNames": [],
+    "mode": "workstation"
+  },
+  "skills": {},
+  "repairAttempts": 1
+}

@@ -1,0 +1,5 @@
+{
+  "name": "@eng/core",
+  "private": true,
+  "type": "module"
+}

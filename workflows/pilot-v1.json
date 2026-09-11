@@ -1,0 +1,8 @@
+{
+  "id": "planning", "version": "1",
+  "phases": [
+    { "id": "intake", "executor": "deterministic", "dependsOn": [], "output": "ticket", "maxAttempts": 2, "timeoutMs": 10000 },
+    { "id": "requirements", "executor": "agent", "dependsOn": ["intake"], "output": "requirements", "skill": "requirements", "maxAttempts": 2, "timeoutMs": 180000 },
+    { "id": "implementation-plan", "executor": "agent", "dependsOn": ["requirements"], "output": "plan", "skill": "plan", "maxAttempts": 2, "timeoutMs": 180000 }
+  ]
+}

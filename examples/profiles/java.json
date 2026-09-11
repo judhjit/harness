@@ -1,0 +1,24 @@
+{
+  "id": "java-service",
+  "name": "Java service",
+  "path": "/replace/with/repository",
+  "base": "main",
+  "languages": ["java"],
+  "checks": [
+    {
+      "id": "tests",
+      "executable": "mvn",
+      "args": ["-B", "test"],
+      "timeoutMs": 600000,
+      "required": true
+    }
+  ],
+  "runtime": {
+    "executable": "gemini",
+    "args": [],
+    "environmentNames": [],
+    "mode": "workstation"
+  },
+  "skills": {},
+  "repairAttempts": 1
+}

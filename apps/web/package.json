@@ -1,0 +1,5 @@
+{
+  "name": "@eng/web",
+  "private": true,
+  "type": "module"
+}

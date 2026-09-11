@@ -1,0 +1,9 @@
+{
+  "key": "JIRA-428",
+  "title": "Add transient retry support",
+  "description": "Propose a bounded retry policy for the selected service.",
+  "acceptanceCriteria": [
+    "Retry transient failures once.",
+    "Preserve permanent errors without retrying."
+  ]
+}
